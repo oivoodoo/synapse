@@ -736,13 +736,14 @@ class MediaRepositoryResource(Resource):
     Clients can resolve URL of attachment that should be automatically
     uploaded and returned the accessible url.
 
-        => POST /_matrix/media/v1/resolve HTTP/1.1
-           <media-url>
+        => POST /_matrix/media/v1/resolve_url HTTP/1.1
+           Content-Type: application/json
+           { "url": <media-url> }
 
         <= HTTP/1.1 200 OK
            Content-Type: application/json
 
-           { "content_uri": "mxc://<server-name>/<media-id>" }
+           { "content_uri": "mxc://<server-name>/<media-id>", "msgtype": "m.image" }
 
     The thumbnail methods are "crop" and "scale". "scale" trys to return an
     image where either the width or the height is smaller than the requested

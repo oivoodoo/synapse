@@ -15,8 +15,10 @@
 import json
 import contextlib
 import random
+import logging
 
 from mock import Mock
+from StringIO import StringIO
 
 from tests import unittest
 from tests.utils import MockMediaRepo, setup_test_homeserver
@@ -27,10 +29,13 @@ from twisted.web import server
 from twisted.web.test.test_web import DummyRequest
 
 from synapse.http.request_metrics import (
-    requests_counter,
+    RequestMetrics,
 )
 from synapse.api.auth import Auth
 from synapse.rest.media.v1.resolve_resource import ResolveResource
+
+
+logger = logging.getLogger(__name__)
 
 
 class SmartDummyRequest(DummyRequest):
@@ -51,8 +56,9 @@ class SmartDummyRequest(DummyRequest):
         DummyRequest.__init__(self, url.split('/'))
         self.method = method
         self.request_seq = random.randint(0, 100)
-        self.request_metrics = requests_counter
         self._disconnected = False
+
+        self.request_metrics = Mock(name='metrics')
 
         args = args or {}
         for k, v in args.items():
@@ -61,6 +67,9 @@ class SmartDummyRequest(DummyRequest):
         headers = headers or {}
         for k, v in headers.items():
             self.requestHeaders.addRawHeader(k, v)
+
+    def set_req_body(self, content):
+        self.content = StringIO(content)
 
     @property
     def resp_body(self):
@@ -79,14 +88,15 @@ class SmartDummyRequest(DummyRequest):
 
 
 class DummySite(server.Site):
-    def get(self, url, args=None, headers=None):
-        return self._request("GET", url, args, headers)
+    def get(self, url, args=None, headers=None, body=None):
+        return self._request("GET", url, args, headers, body)
 
-    def post(self, url, args=None, headers=None):
-        return self._request("POST", url, args, headers)
+    def post(self, url, args=None, headers=None, body=None):
+        return self._request("POST", url, args, headers, body)
 
-    def _request(self, method, url, args, headers):
+    def _request(self, method, url, args, headers, body=None):
         request = SmartDummyRequest(method, url, args, headers)
+        request.set_req_body(body)
         resource = self.getResourceFor(request)
         result = resource.render(request)
         return self._resolveResult(request, result)
@@ -105,7 +115,7 @@ class DummySite(server.Site):
             raise ValueError("Unexpected return value: %r" % (result,))
 
 
-_PATH_PREFIX = "/"
+_PATH_PREFIX = ""
 _EXAMPLE_IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/" \
     "f/f8/Python_logo_and_wordmark.svg/486px-Python_logo_and_wordmark.svg.png"
 _TEST_USER = "@foo:bar"
@@ -141,15 +151,17 @@ class ResolveResourceTestCase(unittest.TestCase):
     def _headers(self):
         return {}
 
-    def _get_args(self, token=_TEST_TOKEN):
-        # TODO: replace args by body url: url request for using json there.
-        return dict(
-            body=json.dumps(dict(url=_EXAMPLE_IMAGE_URL)),
-            access_token=_TEST_TOKEN)
+    @property
+    def _body(self):
+        return json.dumps(dict(url=_EXAMPLE_IMAGE_URL))
+
+    @property
+    def _args(self, token=_TEST_TOKEN):
+        return dict(access_token=_TEST_TOKEN)
 
     @defer.inlineCallbacks
     def test_authentication_requirements_before_processing_resolve_request(self):
-        request = yield self.web.post(self._resolve_url, self._get_args())
+        request = yield self.web.post(self._resolve_url, self._args)
         self.assertEqual(request.responseCode, 500)
 
     @defer.inlineCallbacks
@@ -164,7 +176,7 @@ class ResolveResourceTestCase(unittest.TestCase):
 
         request = yield self.web.post(
             '{}/resolve_url'.format(_PATH_PREFIX),
-            self._get_args(), self._headers)
+            self._args, self._headers, self._body)
         self.assertEqual(request.responseCode, 200)
 
         resp = request.resp_json_body
